@@ -418,12 +418,16 @@ export class MapViewer extends HTMLElement {
     * It is a mimic of the popup() functionality from Leaflet.
     * The use case is : Using MapML as a basic Point coordinates picker with a button to confirm for my UI.
   */
-  openPopupOnMapAtClick(event, template=`<div>Click Coordinates<br>${lat}, ${lon}</div>`) {
+  openPopupOnClick(event, popupTemplate) {
     if(event.detail && event.detail.hasOwnProperty("lat") && event.detail.hasOwnProperty("lon")){
-      var location = new L.LatLng(event.detail.lat,event.detail.lon);
-      L.popup().setLatLng(location).setContent(template).openOn(this._map);
+      popup(new L.LatLng(event.detail.lat,event.detail.lon), popupTemplate)
     }
   }
+
+  popup(location, template=`<div>Click Coordinates<br>${lat}, ${lon}</div>`){
+    return L.popup().setLatLng(location).setContent(template).openOn(this._map);
+  }
+
   zoomTo(lat, lon, zoom) {
     zoom = Number.isInteger(zoom)? zoom:this.zoom;
     var location = new L.LatLng(lat,lon);
