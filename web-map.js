@@ -1,11 +1,12 @@
-import './leaflet-src.js';  // a (very slightly) modified version of Leaflet for use as browser module
+import './leaflet-src.js';  // a lightly modified version of Leaflet for use as browser module
 import './proj4-src.js';        // modified version of proj4; could be stripped down for mapml
 import './proj4leaflet.js'; // not modified, seems to adapt proj4 for leaflet use.
 import './mapml.js';       // refactored URI usage, replaced with URL standard
 import './Leaflet.fullscreen.js';
 import { MapLayer } from './layer.js';
+import { MapArea } from './map-area.js';
 
-export class MapViewer extends HTMLElement {
+export class WebMap extends HTMLMapElement {
   static get observedAttributes() {
     return ['lat', 'lon', 'zoom', 'projection', 'width', 'height', 'controls'];
   }
@@ -29,10 +30,9 @@ export class MapViewer extends HTMLElement {
     return this.hasAttribute('controlslist') ? this.getAttribute("controlslist") : "";
   }
   set controlslist(val) {
-    let options = ["nofullscreen", "nozoom", "nolayer", "noreload"],
-        lowerVal = val.toLowerCase();
-    if (this.controlslist.includes(lowerVal) || !options.includes(lowerVal))return;
-    this.setAttribute("controlslist", this.controlslist+` ${lowerVal}`);
+    if (val.toLowerCase() === "nofullscreen") {
+      this.setAttribute("controlslist", "nofullscreen");
+    }
   }
   get lat() {
     return this.hasAttribute("lat") ? this.getAttribute("lat") : "0";
@@ -62,13 +62,16 @@ export class MapViewer extends HTMLElement {
     return this.hasAttribute("zoom") ? this.getAttribute("zoom") : 0;
   }
   set zoom(val) {
-      var parsedVal = parseInt(val,10);
-      if (!isNaN(parsedVal) && (parsedVal >= 0 && parsedVal <= 25)) {
-        this.setAttribute('zoom', parsedVal);
-      }
+    var parsedVal = parseInt(val,10);
+    if (!isNaN(parsedVal) && (parsedVal >= 0 && parsedVal <= 25)) {
+      this.setAttribute('zoom', parsedVal);
+    }
   }
   get layers() {
     return this.getElementsByTagName('layer-');
+  }
+  get areas() {
+    return this.getElementsByTagName('area');
   }
 
   get extent(){
@@ -90,23 +93,25 @@ export class MapViewer extends HTMLElement {
   constructor() {
     // Always call super first in constructor
     super();
-    
+
     this._source = this.outerHTML;
     let tmpl = document.createElement('template');
     tmpl.innerHTML =
     `<link rel="stylesheet" href="${new URL("leaflet.css", import.meta.url).href}">` +
     `<link rel="stylesheet" href="${new URL("leaflet.fullscreen.css", import.meta.url).href}">` +
     `<link rel="stylesheet" href="${new URL("mapml.css", import.meta.url).href}">`;
-    
-    let shadowRoot = this.attachShadow({mode: 'open'});
+
+    const rootDiv = document.createElement('div');
+    rootDiv.classList.add('web-map');
+
+    let shadowRoot = rootDiv.attachShadow({mode: 'open'});
     this._container = document.createElement('div');
     
     // Set default styles for the map element.
     let mapDefaultCSS = document.createElement('style');
     mapDefaultCSS.innerHTML =
-    `:host {` +
-    `all: initial;` + // Reset properties inheritable from html/body, as some inherited styles may cause unexpected issues with the map element's components (https://github.com/Maps4HTML/Web-Map-Custom-Element/issues/140).
-    `contain: size;` + // Contain size calculations within the map element.
+    `map[is="web-map"] {` +
+    `contain: content;` +  // Contain layout and paint calculations within the map element.
     `display: inline-block;` + // This together with dimension properties is required so that Leaflet isn't working with a height=0 box by default.
     `overflow: hidden;` + // Make the map element behave and look more like a native element.
     `height: 150px;` + // Provide a "default object size" (https://github.com/Maps4HTML/HTML-Map-Element/issues/31).
@@ -114,41 +119,23 @@ export class MapViewer extends HTMLElement {
     `border-width: 2px;` +
     `border-style: inset;` +
     `}` +
-    `:host([frameborder="0"]) {` +
-    `border-width: 0;` +
-    `}` +
-    `:host .mapml-contextmenu,` +
-    `:host .leaflet-control-container {` +
-    `visibility: hidden!important;` + // Visibility hack to improve percieved performance (mitigate FOUC) – visibility is unset in mapml.css! (https://github.com/Maps4HTML/Web-Map-Custom-Element/issues/154).
-    `}` +
-    `:host .leaflet-container {` +
-    `contain: strict;` + // Contain size, layout and paint calculations within the leaflet container element.
-    `}` +
-    `:host(.leaflet-drag-target) .leaflet-control {` +
-    `pointer-events: none;` + // Prevent `:hover` styles from applying to controls when the user is panning the map display and the cursor happens to move over a control.
+    `map[is="web-map"] .web-map {` +
+    `display: contents;` + // This div doesn't have to participate in layout by generating its own box.
     `}`;
     
-    // Hide all (light DOM) children of the map element.
+    // Hide all (light DOM) children of the map element except for the
+    // `<area>` and `<div class="web-map">` (shadow root host) elements.
     let hideElementsCSS = document.createElement('style');
     hideElementsCSS.innerHTML =
-    `mapml-viewer > * {` +
+    `map[is="web-map"] > :not(area):not(.web-map) {` +
     `display: none!important;` +
     `}`;
-
-    shadowRoot.appendChild(mapDefaultCSS);
+    
     shadowRoot.appendChild(tmpl.content.cloneNode(true));
     shadowRoot.appendChild(this._container);
-
+    this.appendChild(rootDiv);
     this.appendChild(hideElementsCSS);
-
-    this._toggleState = false;
-    this.controlsListObserver = new MutationObserver((m) => {
-      m.forEach((change)=>{
-        if(change.type==="attributes" && change.attributeName === "controlslist")
-          this.setControls(false,false,false);
-      });
-    });
-    this.controlsListObserver.observe(this, {attributes:true});
+    document.head.insertAdjacentElement('afterbegin', mapDefaultCSS);
   }
   connectedCallback() {
     if (this.isConnected) {
@@ -205,15 +192,38 @@ export class MapViewer extends HTMLElement {
           fadeAnimation: true
         });
         // the attribution control is not optional
-        this._attributionControl =  this._map.attributionControl.setPrefix('<a href="https://www.w3.org/community/maps4html/" title="W3C Maps for HTML Community Group">Maps4HTML</a> | <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a>');
+        this._attributionControl =  this._map.attributionControl.setPrefix('<a href="https://www.w3.org/community/maps4html/" title="W3C Maps4HTML Community Group">Maps4HTML</a> | <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a>');
 
-        this.setControls(false,false,true);
+        // optionally add controls to the map
+        if (this.controls) {
+          this._layerControl = M.mapMlLayerControl(null,{"collapsed": true}).addTo(this._map);
+          this._zoomControl = L.control.zoom().addTo(this._map);
+          if (!this.controlslist.toLowerCase().includes("nofullscreen")) {
+            this._fullScreenControl = L.control.fullscreen().addTo(this._map);
+          }
+        }
+        if (this.hasAttribute('name')) {
+          var name = this.getAttribute('name');
+          if (name) {
+            this.poster = document.querySelector('img[usemap='+'"#'+name+'"]');
+            // firefox has an issue where the attribution control's use of
+            // _container.innerHTML does not work properly if the engine is throwing
+            // exceptions because there are no area element children of the image map
+            // for firefox only, a workaround is to actually remove the image...
+            if (this.poster) {
+              if (L.Browser.gecko) {
+                  this.poster.removeAttribute('usemap');
+              }
+              //this.appendChild(this.poster);
+            }
+          }
+        }
 
-        // Make the Leaflet container element programmatically identifiable
-        // (https://github.com/Leaflet/Leaflet/issues/7193).
-        this._container.setAttribute('role', 'region');
-        this._container.setAttribute('aria-label', 'Interactive map');
-
+        // undisplay the img in the image map, because it's not needed now
+        // gives a slight fouc, not optimal
+        if (this.poster) {
+          this.poster.style.display = 'none';
+        }
         this._setUpEvents();
         // this.fire('load', {target: this});
       }
@@ -225,53 +235,6 @@ export class MapViewer extends HTMLElement {
   }
   adoptedCallback() {
 //    console.log('Custom map element moved to new page.');
-  }
-
-  setControls(isToggle, toggleShow, setup){
-    if (this.controls && this._map) {
-      let controls = ["_zoomControl", "_reloadButton", "_fullScreenControl", "_layerControl"],
-          options = ["nozoom", "noreload", "nofullscreen", 'nolayer'];
-
-      //removes the left hand controls, if not done they will be re-added in the incorrect order
-      //better to just reset them
-      for(let i = 0 ; i<3;i++){
-        if(this[controls[i]]){
-          this._map.removeControl(this[controls[i]]);
-          delete this[controls[i]];
-        }
-      }
-
-      if (!this.controlslist.toLowerCase().includes("nolayer") && !this._layerControl){
-        this._layerControl = M.mapMlLayerControl(null,{"collapsed": true, mapEl: this}).addTo(this._map);
-        //if this is the initial setup the layers dont need to be readded, causes issues if they are
-        if(!setup){
-          for (var i=0;i<this.layers.length;i++) {
-            if (!this.layers[i].hidden) {
-              this._layerControl.addOverlay(this.layers[i]._layer, this.layers[i].label);
-              this._map.on('moveend', this.layers[i]._validateDisabled,  this.layers[i]);
-              this.layers[i]._layerControl = this._layerControl;
-            }
-          }
-          this._map.fire("validate");
-        }
-      }
-      if (!this.controlslist.toLowerCase().includes("nozoom") && !this._zoomControl){
-        this._zoomControl = L.control.zoom().addTo(this._map);
-      }
-      if (!this.controlslist.toLowerCase().includes("noreload") && !this._reloadButton){
-        this._reloadButton = M.reloadButton().addTo(this._map);
-      }
-      if (!this.controlslist.toLowerCase().includes("nofullscreen") && !this._fullScreenControl){
-        this._fullScreenControl = L.control.fullscreen().addTo(this._map);
-      }
-      //removes any control layers that are not needed, either by the toggling or by the controlslist attribute
-      for(let i in options){
-        if(this[controls[i]] && (this.controlslist.toLowerCase().includes(options[i]) || (isToggle && !toggleShow ))){
-          this._map.removeControl(this[controls[i]]);
-          delete this[controls[i]];
-        }
-      }
-    }
   }
   attributeChangedCallback(name, oldValue, newValue) {
 //    console.log('Attribute: ' + name + ' changed from: '+ oldValue + ' to: '+newValue);
@@ -294,7 +257,7 @@ export class MapViewer extends HTMLElement {
   }
   _dropHandler(event) {
     event.preventDefault();
-    // create a new <layer-> child of this <mapml-viewer> element
+    // create a new <layer-> child of this <map> element
       let l = new MapLayer();
       l.src = event.dataTransfer.getData("text");
       l.label = 'Layer';
@@ -334,12 +297,6 @@ export class MapViewer extends HTMLElement {
   _setUpEvents() {
     this.addEventListener("drop", this._dropHandler, false);
     this.addEventListener("dragover", this._dragoverHandler, false);
-    this.addEventListener("change",
-    function(e) {
-      if(e.target.tagName === "LAYER-"){
-        this.dispatchEvent(new CustomEvent("layerchange", {details:{target: this, originalEvent: e}}));
-      }
-    }, false);
     this._map.on('load',
       function () {
         this.dispatchEvent(new CustomEvent('load', {detail: {target: this}}));
@@ -445,23 +402,33 @@ export class MapViewer extends HTMLElement {
           {target: this}}));
       }, this);
   }
-  _toggleControls() {
+  _toggleControls(controls) {
     if (this._map) {
-      this.setControls(true, this._toggleState, false);
-      this._toggleState = !this._toggleState;
+      if (controls && !this._layerControl) {
+        this._zoomControl = L.control.zoom().addTo(this._map);
+        this._layerControl = M.mapMlLayerControl(null,{"collapsed": true}).addTo(this._map);
+        if (!this.controlslist.toLowerCase().includes("nofullscreen")) {
+          this._fullScreenControl = L.control.fullscreen().addTo(this._map);
+        }
+        for (var i=0;i<this.layers.length;i++) {
+          if (!this.layers[i].hidden) {
+            this._layerControl.addOverlay(this.layers[i]._layer, this.layers[i].label);
+            this._map.on('moveend', this.layers[i]._validateDisabled,  this.layers[i]);
+            this.layers[i]._layerControl = this._layerControl;
+          }
+        }
+      } else if (this._layerControl) {
+        this._map.removeControl(this._layerControl);
+        this._map.removeControl(this._zoomControl);
+        if (this._fullScreenControl) {
+          this._map.removeControl(this._fullScreenControl);
+          delete this._fullScreenControl;
+        }
+        delete this._layerControl;
+        delete this._zoomControl;
+      }
     }
   }
-
-  toggleDebug(){
-    let mapEl = this;
-    if(mapEl._debug){
-      this._debug.remove();
-      this._debug = undefined;
-    } else {
-      this._debug = M.debugOverlay().addTo(this._map);
-    }
-  }
-  
   _widthChanged(width) {
     this.style.width = width+"px";
     this._container.style.width = width+"px";
@@ -484,7 +451,7 @@ export class MapViewer extends HTMLElement {
     this.lat = location.lat;
     this.lon = location.lng;
   }
-    /**
+  /**
     * Proposed internal feature for generating a popup on the map at left click.
     * The goal is to allow the user to pass in a template for what popup they would like to see.
     * It should be available to the client as a default interaction.
@@ -553,7 +520,7 @@ export class MapViewer extends HTMLElement {
     let mapEl = this,
         initialLocation = mapEl._history.shift();
     mapEl._history = [initialLocation];
-    mapEl._historyIndex = 0;
+    mapEl._historyIndex = -1;
     mapEl._traversalCall = true;
     mapEl.zoomTo(initialLocation.lat,initialLocation.lng,initialLocation.zoom);
   }
@@ -564,7 +531,7 @@ export class MapViewer extends HTMLElement {
     window.open(url);
     URL.revokeObjectURL(url);
   }
-  
+
   _ready() {
     // when used in a custom element, the leaflet script element is hidden inside
     // the import's shadow dom.
@@ -585,8 +552,25 @@ export class MapViewer extends HTMLElement {
         }
       }
     }());
+    if (this.hasAttribute('name')) {
+      var name = this.getAttribute('name');
+      if (name) {
+        this.poster = document.querySelector('img[usemap='+'"#'+name+'"]');
+        // firefox has an issue where the attribution control's use of
+        // _container.innerHTML does not work properly if the engine is throwing
+        // exceptions because there are no area element children of the image map
+        // for firefox only, a workaround is to actually remove the image...
+        if (this.poster) {
+          if (L.Browser.gecko) {
+            this.poster.removeAttribute('usemap');
+          }
+          this._container.appendChild(this.poster);
+        }
+      }
+    }
   }
 }
 // need to provide options { extends: ... }  for custom built-in elements
-window.customElements.define('mapml-viewer', MapViewer);
+window.customElements.define('web-map', WebMap,  { extends: 'map' });
 window.customElements.define('layer-', MapLayer);
+window.customElements.define('map-area', MapArea, {extends: 'area'});

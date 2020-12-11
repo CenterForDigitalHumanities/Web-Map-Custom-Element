@@ -29,10 +29,9 @@ export class MapViewer extends HTMLElement {
     return this.hasAttribute('controlslist') ? this.getAttribute("controlslist") : "";
   }
   set controlslist(val) {
-    let options = ["nofullscreen", "nozoom", "nolayer", "noreload"],
-        lowerVal = val.toLowerCase();
-    if (this.controlslist.includes(lowerVal) || !options.includes(lowerVal))return;
-    this.setAttribute("controlslist", this.controlslist+` ${lowerVal}`);
+    if (val.toLowerCase() === "nofullscreen") {
+      this.setAttribute("controlslist", "nofullscreen");
+    }
   }
   get lat() {
     return this.hasAttribute("lat") ? this.getAttribute("lat") : "0";
@@ -105,27 +104,13 @@ export class MapViewer extends HTMLElement {
     let mapDefaultCSS = document.createElement('style');
     mapDefaultCSS.innerHTML =
     `:host {` +
-    `all: initial;` + // Reset properties inheritable from html/body, as some inherited styles may cause unexpected issues with the map element's components (https://github.com/Maps4HTML/Web-Map-Custom-Element/issues/140).
-    `contain: size;` + // Contain size calculations within the map element.
+    `contain: content;` + // Contain layout and paint calculations within the map element.
     `display: inline-block;` + // This together with dimension properties is required so that Leaflet isn't working with a height=0 box by default.
     `overflow: hidden;` + // Make the map element behave and look more like a native element.
     `height: 150px;` + // Provide a "default object size" (https://github.com/Maps4HTML/HTML-Map-Element/issues/31).
     `width: 300px;` +
     `border-width: 2px;` +
     `border-style: inset;` +
-    `}` +
-    `:host([frameborder="0"]) {` +
-    `border-width: 0;` +
-    `}` +
-    `:host .mapml-contextmenu,` +
-    `:host .leaflet-control-container {` +
-    `visibility: hidden!important;` + // Visibility hack to improve percieved performance (mitigate FOUC) – visibility is unset in mapml.css! (https://github.com/Maps4HTML/Web-Map-Custom-Element/issues/154).
-    `}` +
-    `:host .leaflet-container {` +
-    `contain: strict;` + // Contain size, layout and paint calculations within the leaflet container element.
-    `}` +
-    `:host(.leaflet-drag-target) .leaflet-control {` +
-    `pointer-events: none;` + // Prevent `:hover` styles from applying to controls when the user is panning the map display and the cursor happens to move over a control.
     `}`;
     
     // Hide all (light DOM) children of the map element.
@@ -140,15 +125,6 @@ export class MapViewer extends HTMLElement {
     shadowRoot.appendChild(this._container);
 
     this.appendChild(hideElementsCSS);
-
-    this._toggleState = false;
-    this.controlsListObserver = new MutationObserver((m) => {
-      m.forEach((change)=>{
-        if(change.type==="attributes" && change.attributeName === "controlslist")
-          this.setControls(false,false,false);
-      });
-    });
-    this.controlsListObserver.observe(this, {attributes:true});
   }
   connectedCallback() {
     if (this.isConnected) {
@@ -205,14 +181,16 @@ export class MapViewer extends HTMLElement {
           fadeAnimation: true
         });
         // the attribution control is not optional
-        this._attributionControl =  this._map.attributionControl.setPrefix('<a href="https://www.w3.org/community/maps4html/" title="W3C Maps for HTML Community Group">Maps4HTML</a> | <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a>');
+        this._attributionControl =  this._map.attributionControl.setPrefix('<a href="https://www.w3.org/community/maps4html/" title="W3C Maps4HTML Community Group">Maps4HTML</a> | <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a>');
 
-        this.setControls(false,false,true);
-
-        // Make the Leaflet container element programmatically identifiable
-        // (https://github.com/Leaflet/Leaflet/issues/7193).
-        this._container.setAttribute('role', 'region');
-        this._container.setAttribute('aria-label', 'Interactive map');
+        // optionally add controls to the map
+        if (this.controls) {
+          this._layerControl = M.mapMlLayerControl(null,{"collapsed": true}).addTo(this._map);
+          this._zoomControl = L.control.zoom().addTo(this._map);
+          if (!this.controlslist.toLowerCase().includes("nofullscreen")) {
+            this._fullScreenControl = L.control.fullscreen().addTo(this._map);
+          }
+        }
 
         this._setUpEvents();
         // this.fire('load', {target: this});
@@ -225,53 +203,6 @@ export class MapViewer extends HTMLElement {
   }
   adoptedCallback() {
 //    console.log('Custom map element moved to new page.');
-  }
-
-  setControls(isToggle, toggleShow, setup){
-    if (this.controls && this._map) {
-      let controls = ["_zoomControl", "_reloadButton", "_fullScreenControl", "_layerControl"],
-          options = ["nozoom", "noreload", "nofullscreen", 'nolayer'];
-
-      //removes the left hand controls, if not done they will be re-added in the incorrect order
-      //better to just reset them
-      for(let i = 0 ; i<3;i++){
-        if(this[controls[i]]){
-          this._map.removeControl(this[controls[i]]);
-          delete this[controls[i]];
-        }
-      }
-
-      if (!this.controlslist.toLowerCase().includes("nolayer") && !this._layerControl){
-        this._layerControl = M.mapMlLayerControl(null,{"collapsed": true, mapEl: this}).addTo(this._map);
-        //if this is the initial setup the layers dont need to be readded, causes issues if they are
-        if(!setup){
-          for (var i=0;i<this.layers.length;i++) {
-            if (!this.layers[i].hidden) {
-              this._layerControl.addOverlay(this.layers[i]._layer, this.layers[i].label);
-              this._map.on('moveend', this.layers[i]._validateDisabled,  this.layers[i]);
-              this.layers[i]._layerControl = this._layerControl;
-            }
-          }
-          this._map.fire("validate");
-        }
-      }
-      if (!this.controlslist.toLowerCase().includes("nozoom") && !this._zoomControl){
-        this._zoomControl = L.control.zoom().addTo(this._map);
-      }
-      if (!this.controlslist.toLowerCase().includes("noreload") && !this._reloadButton){
-        this._reloadButton = M.reloadButton().addTo(this._map);
-      }
-      if (!this.controlslist.toLowerCase().includes("nofullscreen") && !this._fullScreenControl){
-        this._fullScreenControl = L.control.fullscreen().addTo(this._map);
-      }
-      //removes any control layers that are not needed, either by the toggling or by the controlslist attribute
-      for(let i in options){
-        if(this[controls[i]] && (this.controlslist.toLowerCase().includes(options[i]) || (isToggle && !toggleShow ))){
-          this._map.removeControl(this[controls[i]]);
-          delete this[controls[i]];
-        }
-      }
-    }
   }
   attributeChangedCallback(name, oldValue, newValue) {
 //    console.log('Attribute: ' + name + ' changed from: '+ oldValue + ' to: '+newValue);
@@ -334,12 +265,6 @@ export class MapViewer extends HTMLElement {
   _setUpEvents() {
     this.addEventListener("drop", this._dropHandler, false);
     this.addEventListener("dragover", this._dragoverHandler, false);
-    this.addEventListener("change",
-    function(e) {
-      if(e.target.tagName === "LAYER-"){
-        this.dispatchEvent(new CustomEvent("layerchange", {details:{target: this, originalEvent: e}}));
-      }
-    }, false);
     this._map.on('load',
       function () {
         this.dispatchEvent(new CustomEvent('load', {detail: {target: this}}));
@@ -445,23 +370,33 @@ export class MapViewer extends HTMLElement {
           {target: this}}));
       }, this);
   }
-  _toggleControls() {
+  _toggleControls(controls) {
     if (this._map) {
-      this.setControls(true, this._toggleState, false);
-      this._toggleState = !this._toggleState;
+      if (controls && !this._layerControl) {
+        this._zoomControl = L.control.zoom().addTo(this._map);
+        this._layerControl = M.mapMlLayerControl(null,{"collapsed": true}).addTo(this._map);
+        if (!this.controlslist.toLowerCase().includes("nofullscreen")) {
+          this._fullScreenControl = L.control.fullscreen().addTo(this._map);
+        }
+        for (var i=0;i<this.layers.length;i++) {
+          if (!this.layers[i].hidden) {
+            this._layerControl.addOverlay(this.layers[i]._layer, this.layers[i].label);
+            this._map.on('moveend', this.layers[i]._validateDisabled,  this.layers[i]);
+            this.layers[i]._layerControl = this._layerControl;
+          }
+        }
+      } else if (this._layerControl) {
+        this._map.removeControl(this._layerControl);
+        this._map.removeControl(this._zoomControl);
+        if (this._fullScreenControl) {
+          this._map.removeControl(this._fullScreenControl);
+          delete this._fullScreenControl;
+        }
+        delete this._layerControl;
+        delete this._zoomControl;
+      }
     }
   }
-
-  toggleDebug(){
-    let mapEl = this;
-    if(mapEl._debug){
-      this._debug.remove();
-      this._debug = undefined;
-    } else {
-      this._debug = M.debugOverlay().addTo(this._map);
-    }
-  }
-  
   _widthChanged(width) {
     this.style.width = width+"px";
     this._container.style.width = width+"px";
@@ -484,6 +419,7 @@ export class MapViewer extends HTMLElement {
     this.lat = location.lat;
     this.lon = location.lng;
   }
+
     /**
     * Proposed internal feature for generating a popup on the map at left click.
     * The goal is to allow the user to pass in a template for what popup they would like to see.
@@ -504,6 +440,7 @@ export class MapViewer extends HTMLElement {
       L.popup().setLatLng(location).setContent(template).openOn(this._map);
     }
   }
+  
   _updateMapCenter() {
     // remember to tell Leaflet event handler that 'this' in here refers to
     //  something other than the map in this case the custom polymer element
@@ -553,7 +490,7 @@ export class MapViewer extends HTMLElement {
     let mapEl = this,
         initialLocation = mapEl._history.shift();
     mapEl._history = [initialLocation];
-    mapEl._historyIndex = 0;
+    mapEl._historyIndex = -1;
     mapEl._traversalCall = true;
     mapEl.zoomTo(initialLocation.lat,initialLocation.lng,initialLocation.zoom);
   }
