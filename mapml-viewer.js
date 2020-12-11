@@ -411,6 +411,7 @@ export class MapViewer extends HTMLElement {
         this._map.invalidateSize(false);
     }
   }
+
   /**
     * Proposed internal feature for generating a popup on the map at left click.
     * The goal is to allow the user to pass in a template for what popup they would like to see.
@@ -418,13 +419,8 @@ export class MapViewer extends HTMLElement {
     * It is a mimic of the popup() functionality from Leaflet.
     * The use case is : Using MapML as a basic Point coordinates picker with a button to confirm for my UI.
   */
-  openPopupOnClick(event, popupTemplate) {
-    if(event.detail && event.detail.hasOwnProperty("lat") && event.detail.hasOwnProperty("lon")){
-      popup(new L.LatLng(event.detail.lat,event.detail.lon), popupTemplate)
-    }
-  }
-
-  popup(location, template=`<div>Click Coordinates<br>${lat}, ${lon}</div>`){
+  popup(lat, lon, template=`<div>Click Coordinates<br>${lat}, ${lon}</div>`){
+    var location = new L.LatLng(lat,lon);
     return L.popup().setLatLng(location).setContent(template).openOn(this._map);
   }
 
